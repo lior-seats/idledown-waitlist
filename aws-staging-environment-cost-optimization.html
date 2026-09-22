@@ -1,0 +1,326 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>AWS Staging Environment Cost Optimization: Stop Paying for Idle Containers | IdleDown</title>
+  <meta name="description" content="AWS staging environments running 24/7 burn thousands per year for zero benefit. Here's how to cut ECS, EC2, and RDS staging costs by 70% with auto-stop and scheduled scaling." />
+  <link rel="canonical" href="https://lior-seats.github.io/idledown-waitlist/aws-staging-environment-cost-optimization.html" />
+  <meta property="og:title" content="AWS Staging Environment Cost Optimization: Stop Paying for Idle Containers" />
+  <meta property="og:description" content="Cut AWS ECS, EC2, and RDS staging costs by 70% with auto-stop and scheduled scaling. Practical guide with real numbers." />
+  <meta property="og:url" content="https://lior-seats.github.io/idledown-waitlist/aws-staging-environment-cost-optimization.html" />
+  <meta property="og:type" content="article" />
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; color: #1a1a1a; background: #fff; line-height: 1.7; }
+    header { background: #0f172a; color: #fff; padding: 14px 24px; display: flex; align-items: center; gap: 12px; }
+    header a { color: #86efac; text-decoration: none; font-size: 1.1rem; font-weight: 700; }
+    header span { color: #64748b; font-size: 0.9rem; }
+    .container { max-width: 760px; margin: 0 auto; padding: 40px 24px 80px; }
+    h1 { font-size: 2rem; font-weight: 800; line-height: 1.2; margin-bottom: 16px; color: #0f172a; }
+    .meta { color: #64748b; font-size: 0.9rem; margin-bottom: 32px; }
+    h2 { font-size: 1.3rem; font-weight: 700; margin: 36px 0 12px; color: #0f172a; }
+    h3 { font-size: 1.1rem; font-weight: 600; margin: 24px 0 10px; color: #1e293b; }
+    p { margin-bottom: 16px; }
+    code { background: #f1f5f9; border: 1px solid #e2e8f0; border-radius: 4px; padding: 2px 6px; font-family: 'Fira Code', 'Courier New', monospace; font-size: 0.875rem; }
+    pre { background: #0f172a; color: #e2e8f0; border-radius: 8px; padding: 20px; overflow-x: auto; margin: 20px 0; font-size: 0.85rem; line-height: 1.6; }
+    pre code { background: none; border: none; padding: 0; color: inherit; font-size: inherit; }
+    ul, ol { margin: 12px 0 16px 24px; }
+    li { margin-bottom: 6px; }
+    .cost-breakdown { background: #fff7ed; border: 1px solid #fed7aa; border-radius: 10px; padding: 20px; margin: 20px 0; }
+    .cost-breakdown h4 { font-size: 1rem; font-weight: 700; color: #9a3412; margin-bottom: 12px; }
+    .cost-row { display: flex; justify-content: space-between; padding: 6px 0; border-bottom: 1px solid #fed7aa; font-size: 0.9rem; }
+    .cost-row:last-child { border-bottom: none; font-weight: 700; }
+    .cta-box { background: linear-gradient(135deg, #0f172a 0%, #166534 100%); color: #fff; border-radius: 12px; padding: 32px; margin: 40px 0; text-align: center; }
+    .cta-box h3 { font-size: 1.4rem; margin-bottom: 10px; }
+    .cta-box p { color: #bbf7d0; margin-bottom: 20px; }
+    .cta-btn { display: inline-block; background: #4ade80; color: #0f172a; font-weight: 700; padding: 12px 28px; border-radius: 8px; text-decoration: none; font-size: 1rem; }
+    blockquote { border-left: 4px solid #4ade80; padding: 12px 20px; background: #f0fdf4; border-radius: 0 8px 8px 0; margin: 20px 0; color: #14532d; }
+    table { width: 100%; border-collapse: collapse; margin: 20px 0; font-size: 0.9rem; }
+    th { background: #f1f5f9; text-align: left; padding: 10px 14px; border: 1px solid #e2e8f0; font-weight: 600; }
+    td { padding: 10px 14px; border: 1px solid #e2e8f0; }
+    tr:nth-child(even) td { background: #f8fafc; }
+    .badge { display: inline-block; background: #dcfce7; color: #166534; padding: 2px 8px; border-radius: 999px; font-size: 0.8rem; font-weight: 600; }
+    footer { text-align: center; color: #94a3b8; font-size: 0.85rem; padding: 24px; border-top: 1px solid #e2e8f0; margin-top: 60px; }
+  </style>
+</head>
+<body>
+<header>
+  <a href="https://lior-seats.github.io/idledown-waitlist/">IdleDown</a>
+  <span>/ Blog</span>
+</header>
+
+<div class="container">
+  <h1>AWS Staging Environment Cost Optimization: Stop Paying for Idle Containers</h1>
+  <p class="meta">September 22, 2026 · 10 min read</p>
+
+  <p>AWS is exceptional at billing you for resources you're not using. Staging environments are the biggest offender: they sit idle nights and weekends, but ECS tasks, EC2 instances, and RDS clusters all continue accruing charges regardless.</p>
+
+  <p>This guide focuses specifically on AWS — the concrete cost breakdown, and the step-by-step changes that cut staging spend 60-75% without disrupting development workflow.</p>
+
+  <h2>The Real AWS Staging Cost</h2>
+
+  <p>Let's build a realistic cost model for a typical startup staging setup:</p>
+
+  <div class="cost-breakdown">
+    <h4>📊 Typical Staging Stack (us-east-1, monthly)</h4>
+    <div class="cost-row"><span>3× ECS Fargate tasks (1 vCPU / 2GB, 24/7)</span><span>$168</span></div>
+    <div class="cost-row"><span>1× RDS PostgreSQL db.t3.medium (Multi-AZ off)</span><span>$52</span></div>
+    <div class="cost-row"><span>1× ElastiCache t3.micro (Redis)</span><span>$12</span></div>
+    <div class="cost-row"><span>Load Balancer (ALB)</span><span>$22</span></div>
+    <div class="cost-row"><span>Data transfer + CloudWatch logs</span><span>$15</span></div>
+    <div class="cost-row"><span><strong>Total (current)</strong></span><span><strong>$269/month</strong></span></div>
+    <div class="cost-row"><span><strong>After hibernation (business hours only)</strong></span><span><strong>$82/month</strong></span></div>
+    <div class="cost-row"><span><strong>Annual savings</strong></span><span><strong>$2,244</strong></span></div>
+  </div>
+
+  <p>This is a conservative mid-tier setup. Larger staging environments or multiple isolated environments per feature branch multiply these numbers quickly.</p>
+
+  <h2>What You Can and Can't Hibernate</h2>
+
+  <table>
+    <thead>
+      <tr><th>Service</th><th>Hibernatable?</th><th>Method</th><th>Cold start</th></tr>
+    </thead>
+    <tbody>
+      <tr><td>ECS Fargate tasks</td><td>✅ Yes</td><td>Set desired count = 0</td><td>30-90s</td></tr>
+      <tr><td>EC2 instances</td><td>✅ Yes</td><td>Stop instance (disk preserved)</td><td>60-120s</td></tr>
+      <tr><td>RDS (standard)</td><td>✅ Yes (stop)</td><td>Stop DB instance (7-day limit)</td><td>2-5 min</td></tr>
+      <tr><td>Aurora Serverless v2</td><td>✅ Auto</td><td>Scale to 0 ACUs when idle</td><td>~5s</td></tr>
+      <tr><td>ElastiCache</td><td>❌ No direct stop</td><td>Delete + recreate, or keep running</td><td>N/A</td></tr>
+      <tr><td>ALB</td><td>❌ Always billed</td><td>Cannot stop; minimal cost ($16/mo min)</td><td>N/A</td></tr>
+    </tbody>
+  </table>
+
+  <blockquote>
+    <strong>RDS note:</strong> AWS automatically restarts stopped RDS instances after 7 days. Build this into your automation — either restart the stop schedule, use Aurora Serverless v2, or keep RDS running if cold-start latency on DB startup would hurt too much.
+  </blockquote>
+
+  <h2>Implementation: ECS Fargate Scale-to-Zero</h2>
+
+  <h3>Option A: EventBridge + Lambda (scheduled)</h3>
+
+  <p>The most reliable pattern: two EventBridge rules trigger a Lambda function to scale ECS services up or down on a schedule.</p>
+
+  <pre><code># Lambda function: ecs_scaler.py
+import boto3
+import json
+
+def lambda_handler(event, context):
+    ecs = boto3.client('ecs')
+    action = event['action']  # 'start' or 'stop'
+    
+    cluster = 'staging'
+    services = ['api-service', 'worker-service', 'web-service']
+    
+    desired = 1 if action == 'start' else 0
+    
+    for service in services:
+        ecs.update_service(
+            cluster=cluster,
+            service=service,
+            desiredCount=desired
+        )
+        print(f"Set {service} desiredCount={desired}")
+    
+    return {'statusCode': 200, 'services_updated': len(services)}</code></pre>
+
+  <pre><code># EventBridge rules via Terraform
+resource "aws_cloudwatch_event_rule" "stop_staging" {
+  name                = "stop-staging-nightly"
+  schedule_expression = "cron(0 23 ? * MON-FRI *)"  # 7pm ET
+  description         = "Stop staging ECS services after business hours"
+}
+
+resource "aws_cloudwatch_event_rule" "start_staging" {
+  name                = "start-staging-morning"
+  schedule_expression = "cron(0 12 ? * MON-FRI *)"  # 8am ET
+  description         = "Start staging ECS services before business hours"
+}
+
+resource "aws_cloudwatch_event_target" "stop_target" {
+  rule      = aws_cloudwatch_event_rule.stop_staging.name
+  target_id = "StopStagingLambda"
+  arn       = aws_lambda_function.ecs_scaler.arn
+  input     = jsonencode({ action = "stop" })
+}
+
+resource "aws_cloudwatch_event_target" "start_target" {
+  rule      = aws_cloudwatch_event_rule.start_staging.name
+  target_id = "StartStagingLambda"
+  arn       = aws_lambda_function.ecs_scaler.arn
+  input     = jsonencode({ action = "start" })
+}</code></pre>
+
+  <h3>Option B: GitHub Actions (activity-triggered)</h3>
+
+  <p>A more developer-friendly approach: staging scales up automatically when a push is made to the staging branch, and scales down after 2 hours of inactivity.</p>
+
+  <pre><code># .github/workflows/staging-wakeup.yml
+name: Wake Staging on Push
+on:
+  push:
+    branches: [staging, develop]
+
+jobs:
+  wake-staging:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Scale up ECS staging services
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          AWS_DEFAULT_REGION: us-east-1
+        run: |
+          for service in api-service worker-service web-service; do
+            aws ecs update-service \
+              --cluster staging \
+              --service $service \
+              --desired-count 1
+          done
+          echo "Staging environment starting up..."
+          echo "Allow ~90 seconds for services to become healthy."</code></pre>
+
+  <h2>Implementation: RDS Stop/Start</h2>
+
+  <p>Stopping RDS on the same schedule saves another $50-200/month depending on instance size:</p>
+
+  <pre><code># Add to the same Lambda function:
+def stop_rds(rds_client, db_identifier):
+    try:
+        rds_client.stop_db_instance(DBInstanceIdentifier=db_identifier)
+        print(f"Stopped RDS: {db_identifier}")
+    except rds_client.exceptions.InvalidDBInstanceStateFault:
+        print(f"RDS {db_identifier} already stopped or cannot be stopped")
+
+def start_rds(rds_client, db_identifier):
+    rds_client.start_db_instance(DBInstanceIdentifier=db_identifier)
+    print(f"Starting RDS: {db_identifier}")
+
+# Important: start RDS BEFORE ECS services
+# RDS takes 2-5 minutes; add a wait step or accept the first few requests failing</code></pre>
+
+  <p><strong>RDS start ordering matters:</strong> ECS tasks that connect to RDS on startup will fail if the database isn't ready. Two solutions:</p>
+  <ul>
+    <li>Start RDS 10 minutes before ECS (separate EventBridge rule with offset)</li>
+    <li>Add connection retry logic with exponential backoff in your application code (recommended anyway)</li>
+  </ul>
+
+  <h2>The Aurora Serverless v2 Upgrade</h2>
+
+  <p>For new staging setups, Aurora Serverless v2 is the right choice: it scales to near-zero (0.5 ACUs ≈ $0.07/hour) during idle periods and scales up instantly on load. No stop/start automation needed.</p>
+
+  <pre><code>resource "aws_rds_cluster" "staging" {
+  cluster_identifier     = "staging-cluster"
+  engine                 = "aurora-postgresql"
+  engine_version         = "15.4"
+  engine_mode            = "provisioned"
+  database_name          = "staging"
+  master_username        = var.db_username
+  master_password        = var.db_password
+  
+  serverlessv2_scaling_configuration {
+    min_capacity = 0.5   # ~$0.07/hour at rest vs $0.10+/hour for t3.medium
+    max_capacity = 4.0   # scales up during load testing
+  }
+  
+  skip_final_snapshot = true  # staging only
+}
+
+resource "aws_rds_cluster_instance" "staging" {
+  cluster_identifier = aws_rds_cluster.staging.id
+  instance_class     = "db.serverless"
+  engine             = aws_rds_cluster.staging.engine
+}</code></pre>
+
+  <h2>Monitoring Savings with AWS Cost Explorer Tags</h2>
+  <p>Tag all staging resources consistently to track the actual impact:</p>
+
+  <pre><code># Apply to all staging resources
+tags = {
+  Environment = "staging"
+  CostCenter  = "engineering"
+  AutoHibernate = "true"
+}
+
+# Query in Cost Explorer:
+aws ce get-cost-and-usage \
+  --time-period Start=2026-09-01,End=2026-09-22 \
+  --granularity DAILY \
+  --filter '{
+    "Tags": {
+      "Key": "Environment",
+      "Values": ["staging"]
+    }
+  }' \
+  --metrics BlendedCost \
+  --group-by '[{"Type":"DIMENSION","Key":"SERVICE"}]'</code></pre>
+
+  <h2>Handling Edge Cases</h2>
+
+  <h3>CI/CD pipelines that need staging</h3>
+  <p>Integration tests often need staging running during CI runs. Add a GitHub Actions step to wake staging before running tests:</p>
+  <pre><code>- name: Ensure staging is running
+  run: |
+    # Check if ECS services are running
+    COUNT=$(aws ecs describe-services \
+      --cluster staging \
+      --services api-service \
+      --query 'services[0].runningCount' \
+      --output text)
+    if [ "$COUNT" -eq "0" ]; then
+      echo "Starting staging services..."
+      aws ecs update-service --cluster staging --service api-service --desired-count 1
+      aws ecs wait services-stable --cluster staging --services api-service
+    fi</code></pre>
+
+  <h3>On-call and production incidents</h3>
+  <p>Engineers debugging production issues at 2am need staging available. Add an on-demand wakeup endpoint:</p>
+  <pre><code># Simple API Gateway + Lambda endpoint to start staging on demand
+# Accessible via Slack command or internal dashboard
+# Automatically scales back down after 4 hours of inactivity</code></pre>
+
+  <div class="cta-box">
+    <h3>Skip the custom Lambda glue</h3>
+    <p>IdleDown handles ECS, EC2, RDS, and Fly.io hibernation through a single dashboard. Connect your AWS account, set idle thresholds, and see live savings — no custom scripts, no EventBridge configuration, no manual scheduling.</p>
+    <a href="https://lior-seats.github.io/idledown-waitlist/" class="cta-btn">Join the IdleDown waitlist →</a>
+  </div>
+
+  <h2>Quick Implementation Checklist</h2>
+  <ol>
+    <li>Tag all staging resources with <code>Environment=staging</code></li>
+    <li>Get baseline cost from Cost Explorer (last 30 days, filtered by tag)</li>
+    <li>Deploy ECS scheduled scale-to-zero (Lambda + EventBridge)</li>
+    <li>Add RDS stop/start with 10-min offset before ECS start</li>
+    <li>Add GitHub Actions wakeup step to integration test workflows</li>
+    <li>Run for 30 days, pull Cost Explorer report to confirm savings</li>
+  </ol>
+
+  <h2>Expected Results</h2>
+  <table>
+    <thead>
+      <tr><th>What you implement</th><th>Savings</th><th>Effort</th></tr>
+    </thead>
+    <tbody>
+      <tr><td>ECS scale-to-zero only</td><td>~50%</td><td>2-3 hours</td></tr>
+      <tr><td>ECS + RDS stop/start</td><td>~65%</td><td>4-5 hours</td></tr>
+      <tr><td>ECS + Aurora Serverless v2</td><td>~70%</td><td>Migration + 4h</td></tr>
+      <tr><td>All of the above + ElastiCache right-sizing</td><td>~75%</td><td>Full day</td></tr>
+    </tbody>
+  </table>
+
+  <p>The first option — ECS scale-to-zero — delivers half the savings for a few hours of work. For most teams, that's the right starting point before optimizing further.</p>
+</div>
+
+<footer>
+  <p>© 2026 IdleDown. <a href="https://lior-seats.github.io/idledown-waitlist/">Back to IdleDown waitlist</a></p>
+</footer>
+
+<script>
+  (function(){
+    var p = 'idledown-aws-blog';
+    fetch('https://agent-control-plane-w3m9.onrender.com/api/hit?page=' + encodeURIComponent(p));
+  })();
+</script>
+</body>
+</html>
